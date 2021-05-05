@@ -1,0 +1,109 @@
+---
+title: "MachineLearningClassProject"
+author: "Gabe Carvalho"
+date: "April, 2021"
+output:
+  html_document:
+    keep_md: yes
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(caret)
+library(dplyr)
+library(tidyr)
+
+## Enable Parallel Processing
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+
+```
+
+## Synopsis
+
+This analysis will explore the ability of machine learning to use data from wearable devices to determine what activities wearers were performing. Information on the dataset can be viewed here <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>.  
+
+
+```{r load}
+trainData<-read.csv("pml-training.csv")
+testData<-read.csv("pml-testing.csv")
+
+```
+
+## Data Preparation
+
+Before the modle is run the appropriate predictors must be selected. There being 160 variables most will need to be eliminated for the model to run. First some variables of junk and redundant data are removed. Then a random forest is run to determine the which group of variables will be the best predictors. These will then be stored in rfe_lm_profile and used for the model.
+
+```{r cleaning}
+
+##Remove columns of time stamps and user names (these will cause over prediction in the training data)
+trainData <- trainData[, -c(1:7)]
+testData <- testData[, -c(1:7)]
+
+##replace NA with 0
+trainData <-trainData[ , colSums(is.na(trainData)) == 0]
+
+##Remove near zero variance columns to speed up predictor selection
+nzv <-nearZeroVar(trainData)
+trainData <-trainData[, -nzv]
+
+##Random Forest predictor slection
+ctrl_param <- rfeControl(functions = rfFuncs,
+                   method = "repeatedcv",
+                   repeats = 2,
+                   number=3,
+                   verbose = FALSE,
+                   allowParallel = TRUE,
+                   returnResamp = "all")
+rfe_lm_profile <- rfe(classe~., trainData,
+                 sizes = c(4,6,8,10),
+                 mtry=6,
+                 rfeControl = ctrl_param,
+                 na.action = na.pass)
+##summary(trainData)
+rfe_lm_profile
+predictors(rfe_lm_profile)
+
+```
+
+## Modeling
+
+For this analysis the model will split the the training set into 10 folds, using 9 of the folds to train the model and the 10th to test it. This process is repeated 10 times with each fold used as the reserved test set 1 time.
+
+```{r modeling}
+
+y<-as.matrix(select(trainData,"classe"))
+x<-select(trainData,c(predictors(rfe_lm_profile)))
+train_control<- trainControl(method="cv", number=10, savePredictions = TRUE, allowParallel = TRUE)
+modelFit<-train(x,y,trControl=train_control,  na.action  = na.pass)
+
+# control <- trainControl(method='repeatedcv', 
+#                         number=10, 
+#                         repeats=3,
+#                         allowParallel = TRUE)
+# mtry <- sqrt(ncol(x))
+# tunegrid <- expand.grid(.mtry=mtry)
+# modelFit<<- train(x,y, 
+#                       method='rf', 
+#                       na.action  = na.omit,
+#                       metric='Accuracy', 
+#                       tuneGrid=tunegrid, 
+#                       trControl=control)
+
+
+## Stop parallel processing
+stopCluster(cluster)
+registerDoSEQ()
+```
+## Predicting
+
+Here we see the summary of the model's fit and then try to predict the test data results. Accuracy for 27 variables is highest at 99.5%, so the 27 variable model will be used to predict the test data.
+
+```{r Predicting}
+summary(modelFit$pred)
+modelFit
+##predict(modelFit, newdata=as.matrix(select(testData,c(predictors(rfe_lm_profile)))))
+```
